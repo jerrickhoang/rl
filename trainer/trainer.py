@@ -1,3 +1,6 @@
+import numpy as np
+
+
 class Trainer(object):
 
     def __init__(self, env, policy, optimizer):
@@ -7,8 +10,8 @@ class Trainer(object):
 
     
     def rollout(self, render=False):
-        obs, actions, rewards, done, n_samples = [], [], [], False, 0
-        ob = env.reset()
+        obs, actions, rewards, done = [], [], [], False
+        ob = self._env.reset()
         
         while not done:
             action = self._policy.act(ob)
@@ -17,26 +20,26 @@ class Trainer(object):
             actions.append(action)
             rewards.append(reward)
             ob = next_ob
-            n_samples += 1
 
             if render:
-                env.render()
+                self._env.render()
 
-        return obs, actions, rewards, n_samples
+        return obs, actions, rewards
 
     
-    def train(self):
+    def train(self, n_iters=100, batch_size=2000):
         for itr in range(n_iters):
-            all_obs, all_actions, episode_rewards, n_samples = [], [], [], 0
+            all_obs, all_actions, all_rewards, episode_rewards, n_samples = [], [], [], [], 0
 
             while n_samples < batch_size:
-                obs, action, rewards, n_samples = self.rollout()
-                all_obs.append(observations)
+                obs, actions, rewards = self.rollout()
+                all_obs.append(obs)
                 all_actions.append(actions)
                 all_rewards.append(rewards)
+                episode_rewards.append(np.sum(rewards))
+                n_samples += len(obs)
 
-            self._optimizer.improve_policy(self.policy, all_obs, all_actions, all_rewards)
+            self._optimizer.improve_policy(self._policy, all_obs, all_actions, all_rewards)
 
-            print("Iteration: {}, Average Return {}".format(itr, np.mean(all_rewards))
-
+            print("Iteration: {}, Average Return {}".format(itr, np.mean(episode_rewards)))
 

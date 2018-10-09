@@ -88,6 +88,6 @@ class PointEnv(Env):
 
 register(
     'Point-v0',
-    entry_point='environments.point_env:PointEnv',
+    entry_point='env.point:PointEnv',
     timestep_limit=40,
 )
