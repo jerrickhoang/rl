@@ -14,7 +14,7 @@ class Trainer(object):
         ob = self._env.reset()
         
         while not done:
-            action = self._policy.act(ob)
+            action = self._policy.plan(ob)
             next_ob, reward, done, info = self._env.step(action)
             obs.append(ob)
             actions.append(action)
@@ -27,7 +27,7 @@ class Trainer(object):
         return obs, actions, rewards
 
     
-    def train(self, n_iters=100, batch_size=2000):
+    def train(self, n_iters=100, batch_size=20):
         for itr in range(n_iters):
             all_obs, all_actions, all_rewards, episode_rewards, n_samples = [], [], [], [], 0
 

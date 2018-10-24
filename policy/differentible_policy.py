@@ -1,9 +1,9 @@
-class Policy(object):
+class DifferentiblePolicy(object):
 
     def __init__(self, estimator):
         self._estimator = estimator
 
-    def act(self, obs):
+    def plan(self, obs):
         return self._estimator.predict(obs)
 
     def grad_log(self, action, obs):

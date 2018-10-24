@@ -1,106 +1,159 @@
+import gym
+import click
+import copy
 import numpy as np
-import scipy.stats as stats
-from env import env_register
+import objgraph
+import gc
+
+#from optimizer.cem import CEM
+from scipy.stats import uniform
 
 
-num_elites = 50
-popsize = 500
-max_iters = 5
-alpha = 0.1
-epsilon = 0.001
-plan_hor = 30
-ac_lb = np.array([-1.0]*6)
-ac_ub = np.array([1.0]*6)
+from env import point
 
-def reward_function(env, curr_ob, actions):
-    action_list = np.split(actions, plan_hor, axis=1)
-    reward_list = []
-    observation = curr_ob.copy()
-    for i in range(popsize):
-        curr_reward = 0.
-        curr_ob = observation.copy()
-        for j in range(plan_hor):
-            curr_ob = env.fdynamics(
-                {'start_state': curr_ob, 'action': action_list[j][i]})
-            curr_reward += env.reward(
-                {'start_state': curr_ob, 'action': action_list[j][i]})
-        reward_list.append(curr_reward)
-    return np.array(reward_list)
+class RandomShooting(object):
 
-def cem_plan(curr_ob, action_space):
-    sol_dim = action_space * plan_hor
-    lb = np.tile(ac_lb, [plan_hor])
-    ub = np.tile(ac_ub, [plan_hor])
-    mean, var, t = 0., 1., 0
-    X = stats.truncnorm(-2, 2, loc=np.zeros_like(mean), scale=np.ones_like(mean))
+    def __init__(self, env, popsize=1000, depth=30):
+        self._popsize = popsize
+        self._env = copy.deepcopy(env)
+        self._depth = depth
 
-    while (t < max_iters) and np.max(var) > epsilon:
-        lb_dist, ub_dist = mean - lb, ub - mean
-        constrained_var = np.minimum(
-            np.minimum(np.square(lb_dist / 2), np.square(ub_dist / 2)), var)
+    def evaluate_action(self, env, init_ob, action_seq):
+        # env = copy.deepcopy(self._env)
+        ob = copy.deepcopy(init_ob)
+        env.reset()
+        env.env.state = ob
+        total_reward = 0
+        #print("current state {}, action {}".format(env.state, action))
+        step = 0
+        done = False
+        while step < self._depth:
+            action = action_seq[step]
+            _, r, done, _ = env.step(action)
+            total_reward += r
+            step += 1
+        #print("next state {}".format(next_ob))
+        del env
+        return total_reward
 
-        samples = X.rvs(
-            size=[popsize, sol_dim]) * np.sqrt(constrained_var) + mean
-        costs = -1 * reward_function(env, curr_ob, samples)
-        elites = samples[np.argsort(costs)][:num_elites]
+    def plan(self, ob):
+        mean = 0.
+        action_dim = self._env.action_space.shape[0]
+        action_lb = self._env.action_space.low
+        action_ub = self._env.action_space.high
+        scale = action_ub - action_lb
+        samples = uniform.rvs(size=[self._popsize, self._depth, action_dim], loc=action_lb, scale=scale)
 
-        new_mean = np.mean(elites, axis=0)
-        new_var = np.var(elites, axis=0)
+        env_copy = copy.deepcopy(self._env)
+        costs = np.array([self.evaluate_action(env_copy, ob, action_seq) for action_seq in samples])
+        #for i in range(len(samples)):
+        #    print("Action: {}, cost {}".format(samples[i], costs[i]))
+        #print("best action {}".format(samples[np.argmax(costs)]))
+        del env_copy
+        # pick the first action
+        return samples[np.argmax(costs)][0]
 
-        mean = alpha * mean + (1 - alpha) * new_mean
-        var = alpha * var + (1 - alpha) * new_var
+class CEM(object):
+    def __init__(self, env, popsize=1000, n_elites=10, depth=10):
+        self._popsize = popsize
+        self._env = copy.deepcopy(env)
+        self._n_elites = n_elites
+        self._depth = depth
 
-        t += 1
-    sol, solvar = mean, var
-    return sol
+    def evaluate_action(self, env, init_ob, action_seq):
+        # env = copy.deepcopy(self._env)
+        ob = copy.deepcopy(init_ob)
+        env.reset()
+        env.env.state = ob
+        total_reward = 0
+        #print("current state {}, action {}".format(env.state, action))
+        step = 0
+        done = False
+        while step < self._depth:
+            action = action_seq[step]
+            _, r, done, _ = env.step(action)
+            total_reward += r
+            step += 1
+        #print("next state {}".format(next_ob))
+        del env
+        return total_reward
 
-def play_episode_with_env(env):
+    def plan(self, ob):
+        mean = 0.
+        action_dim = self._env.action_space.shape[0]
+        action_lb = self._env.action_space.low
+        action_ub = self._env.action_space.high
+        scale = action_ub - action_lb
+        samples = uniform.rvs(size=[self._popsize, self._depth, action_dim], loc=action_lb, scale=scale)
+        
+        env_copy = copy.deepcopy(self._env)
+        costs = np.array([self.evaluate_action(env_copy, ob, action_seq) for action_seq in samples])
+        elites = samples[np.argsort(costs)][::-1][:self._n_elites]
+        first_actions = [elite[0] for elite in elites]
 
-    # init the variables
-    obs, rewards, actions = [], [], []
+        del env_copy
+        return np.mean(first_actions)
+        
 
-    # start the env (reset the environment)
-    ob, _, _, _ = env.reset()
-    obs.append(ob)
-    action_space = 6
-    rollout_step = 0
-    reward = 0.
+def rollout(env, policy, render=False):
+    # env = copy.deepcopy(env)
+    obs, actions, rewards, done = [], [], [], False
+    ob = env.reset()
+    env.reset()
+    
+    #env.state = [1., 0.]
+    # ob = [1., 0.]
+    # print("starting state is {}".format(env.state))
+    # env.render()
+    step = 0
+    
+    while not done:
+        step += 1
+        if step % 100 == 0:
+            print "taking a step"
+        action = policy.plan(ob)
+        #if step % 100 == 0:
+        #    print "done picking action"
+        
+        # TODO(jhoang): make this work with other env
+        # action = action[:2]
+        # print("Outer loop state is {}".format(ob))
+        next_ob, reward, done, info = env.step(action)
+        #if step % 100 == 0:
+        #    print "done stepping through env"
+        if done:
+            break
+        # obs.append(ob)
+        # actions.append(action)
+        rewards.append(reward)
+        ob = next_ob
 
-    while rollout_step < 1000:
-        if rollout_step % 50 == 0:
-            print('rollout step {}, current reward {}'.format(
-                rollout_step, reward))
-        # generate the policy
-        action_sequence = cem_plan(ob, action_space)
-        action = action_sequence[:6]
-        ob = env.fdynamics(
-            {'start_state': ob, 'action': action})
-        one_step_reward = env.reward(
-            {'start_state': ob , 'action': action})
-        reward += one_step_reward
+        #if step % 100 == 0:
+        #    objgraph.show_most_common_types(limit=10)
 
-        # record the stats
-        rewards.append((one_step_reward))
-        obs.append(ob)
-        actions.append(action)
+        if render:
+            env.render()
+        gc.collect()
 
-        rollout_step += 1
+    return obs, actions, rewards
 
-    traj_episode = {
-        "obs": np.array(obs, dtype=np.float64),
-        "rewards": np.array(rewards, dtype=np.float64),
-        "actions":  np.array(actions, dtype=np.float64),
-    }
-        #if done:  # terminated
-        #    pdb.set_trace()
-        #    # append one more for the raw_obs
-        #    traj_episode = {
-        #        "obs": np.array(obs, dtype=np.float64),
-        #        "rewards": np.array(rewards, dtype=np.float64),
-        #        "actions":  np.array(actions, dtype=np.float64),
-        #    }
-        #    break
-    return traj_episode
 
-env, env_info  = env_register.make_env('gym_cheetah', 666)
-traj_episode = play_episode_with_env(env)
+def main():
+    # TODO(jhoang): test other envs
+    env = gym.make("Point-v0")
+    # optimizer = CEM(env, plan_hor=40, popsize=50, max_iters=10, num_elites=10, alpha=0.5)
+    # optimizer = RandomShooting(env, popsize=100, depth=30)
+    optimizer = CEM(env)
+    n_iters = 100
+    
+    obs, actions, rewards = rollout(env, optimizer, render=True)
+
+    # self._optimizer.improve_policy(self._policy, all_obs, all_actions, all_rewards)
+
+    # print("Iteration: {}, Average Return {}".format(itr, np.sum(rewards)))
+    print ("Averaige Return {} ".format(np.sum(rewards)))
+
+
+  
+if __name__ == "__main__":
+    main()
